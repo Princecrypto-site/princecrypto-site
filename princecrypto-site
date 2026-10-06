@@ -1,0 +1,130 @@
+import requests
+import pandas as pd
+import streamlit as st
+
+page_title="Princecrypto.site | Crypto Tournament"
+
+
+# --- 1. LIVE PRICE FETCHING (Binance Public API) ---
+@st.cache_data(ttl=2)
+def get_crypto_prices():
+    url = "https://api.binance.com/api/v3/ticker/price"
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    try:
+        response = requests.get(url, timeout=5).json()
+        prices = {item['symbol']: float(item['price']) for item in response if item['symbol'] in symbols}
+        return prices
+    except Exception:
+        return {"BTCUSDT": 60000.0, "ETHUSDT": 3000.0, "SOLUSDT": 150.0, "BNBUSDT": 500.0, "XRPUSDT": 0.55}
+
+
+# --- 2. INITIALIZE TOURNAMENT DATA ---
+INITIAL_CAPITAL = 10000.0  # $10,000 starting virtual funds
+
+if "traders" not in st.session_state:
+    st.session_state.traders = {
+        "Trader_Alpha": {"cash": 10000.0, "crypto": {"BTCUSDT": 0.0, "ETHUSDT": 0.0}},
+        "Trader_Beta": {"cash": 10000.0, "crypto": {"BTCUSDT": 0.0, "ETHUSDT": 0.0}},
+        "Trader_Gamma": {"cash": 10000.0, "crypto": {"BTCUSDT": 0.0, "ETHUSDT": 0.0}},
+        "You (User)": {"cash": 10000.0, "crypto": {"BTCUSDT": 0.0, "ETHUSDT": 0.0}}
+    }
+
+# --- 3. UI LAYOUT ---
+st.title("👑 Princecrypto.site")
+st.caption("Compete with $10,000 virtual balance. Top 3 Traders Win the Prize Pool!")
+
+# Live Prices Sidebar
+prices = get_crypto_prices()
+st.sidebar.header("📊 Live Market Prices")
+for symbol, price in prices.items():
+    st.sidebar.metric(symbol, f"${price:,.2f}")
+
+# Main Navigation Tabs
+tab1, tab2, tab3 = st.tabs(["🏆 Live Leaderboard", "📈 Trade Desk", "💰 Tournament Pool & Rewards"])
+
+# --- TAB 1: LIVE LEADERBOARD ---
+with tab1:
+    st.subheader("Current Weekly Standings")
+
+    leaderboard_data = []
+    for name, info in st.session_state.traders.items():
+        portfolio_val = info["cash"]
+        for sym, qty in info["crypto"].items():
+            if sym in prices:
+                portfolio_val += qty * prices[sym]
+
+        roi = ((portfolio_val - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
+        leaderboard_data.append({
+            "Trader": name,
+            "Portfolio Value ($)": round(portfolio_val, 2),
+            "ROI (%)": round(roi, 2),
+            "Cash ($)": round(info["cash"], 2)
+        })
+
+    df = pd.DataFrame(leaderboard_data).sort_values(by="ROI (%)", ascending=False).reset_index(drop=True)
+    df.index = df.index + 1  # 1-based ranking
+
+    st.dataframe(df, width="stretch")
+
+    if len(df) >= 3:
+        col1, col2, col3 = st.columns(3)
+        col1.success(f"🥇 1st Place: **{df.iloc[0]['Trader']}** ({df.iloc[0]['ROI (%)']}%)")
+        col2.info(f"🥈 2nd Place: **{df.iloc[1]['Trader']}** ({df.iloc[1]['ROI (%)']}%)")
+        col3.warning(f"🥉 3rd Place: **{df.iloc[2]['Trader']}** ({df.iloc[2]['ROI (%)']}%)")
+
+# --- TAB 2: TRADE DESK ---
+with tab2:
+    st.subheader("Execute Trades")
+    user_info = st.session_state.traders["You (User)"]
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.metric("Available Cash Balance", f"${user_info['cash']:,.2f}")
+    with col_b:
+        selected_pair = st.selectbox("Select Crypto Pair", list(prices.keys()))
+        current_p = prices.get(selected_pair, 0.0)
+        st.write(f"Current Price: **${current_p:,.2f}**")
+
+    trade_type = st.radio("Order Type", ["Buy", "Sell"], horizontal=True)
+    amount_usd = st.number_input("Amount in USD ($)", min_value=10.0,
+                                 max_value=user_info["cash"] if trade_type == "Buy" else 100000.0, value=100.0)
+
+    if st.button("Execute Order"):
+        crypto_qty = amount_usd / current_p
+
+        if trade_type == "Buy":
+            if user_info["cash"] >= amount_usd:
+                user_info["cash"] -= amount_usd
+                user_info["crypto"][selected_pair] = user_info["crypto"].get(selected_pair, 0.0) + crypto_qty
+                st.success(f"Successfully bought {crypto_qty:.4f} {selected_pair}!")
+            else:
+                st.error("Insufficient Cash Balance!")
+        elif trade_type == "Sell":
+            current_holdings = user_info["crypto"].get(selected_pair, 0.0)
+            if current_holdings >= crypto_qty:
+                user_info["cash"] += amount_usd
+                user_info["crypto"][selected_pair] -= crypto_qty
+                st.success(f"Successfully sold {crypto_qty:.4f} {selected_pair}!")
+            else:
+                st.error("Insufficient Crypto Holdings!")
+
+# --- TAB 3: TOURNAMENT POOL ---
+with tab3:
+    st.subheader("Weekly Tournament Pool Breakdown")
+    entry_fee = 10.0
+    total_participants = 100
+    total_pool = entry_fee * total_participants
+    house_fee = total_pool * 0.10
+    net_pool = total_pool - house_fee
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Buy-in Fee", f"${entry_fee} USDT")
+    c2.metric("Total Players", total_participants)
+    c3.metric("Net Prize Pool", f"${net_pool} USDT")
+
+    st.markdown("""
+    ### Reward Distribution Rules
+    - **1st Place:** 50% of Prize Pool ($450 USDT)
+    - **2nd Place:** 30% of Prize Pool ($270 USDT)
+    - **3rd Place:** 20% of Prize Pool ($180 USDT)
+    """)
